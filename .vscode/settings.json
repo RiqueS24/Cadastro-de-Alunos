@@ -1,0 +1,9 @@
+{
+    "python.defaultInterpreterPath": "C:\\Python314\\python.exe",
+    "python.interpreter.infoVisibility": "always",
+    "code-runner.ignoreSelection": true,
+    "code-runner.runInTerminal": true,
+    "code-runner.executorMap": {
+        "python": "& \"C:\\Python314\\python.exe\" -u"
+    }
+}

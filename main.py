@@ -1,7 +1,8 @@
 # ============================================================
 # ETAPA 1 - IMPORTAÇÃO DAS BIBLIOTECAS
 # ============================================================
-import sqlite3
+import mysql.connector
+from mysql.connector import IntegrityError
 import json
 import os
 import tkinter as tk
@@ -11,23 +12,29 @@ from tkinter import filedialog, messagebox, ttk
 # ETAPA 2 - CAMINHOS DO PROJETO
 # ============================================================
 PASTA_PROGRAMA = os.path.dirname(os.path.abspath(__file__))
-CAMINHO_BANCO = os.path.join(PASTA_PROGRAMA, "sistema_estacio.db")
 CAMINHO_LOGO = os.path.join(PASTA_PROGRAMA, "Estacio_logo.png")
 APP_VERSAO = "versao corrigida - disciplinas"
+MYSQL_CONFIG = {
+    "host": os.getenv("MYSQL_HOST", "localhost"),
+    "port": int(os.getenv("MYSQL_PORT", "3306")),
+    "user": os.getenv("MYSQL_USER", "root"),
+    "password": os.getenv("MYSQL_PASSWORD", ""),
+    "database": os.getenv("MYSQL_DATABASE", "cadastro_alunos_estacio"),
+}
 
 # ============================================================
 # ETAPA 3 - CONFIGURAÇÃO VISUAL DO SISTEMA
 # ============================================================
 CORES = {
-    "fundo": "#F4F7FB",
-    "card": "#FFFFFF",
-    "primaria": "#005EB8",
-    "primaria_hover": "#004A91",
-    "texto": "#1F2937",
-    "texto_suave": "#6B7280",
-    "borda": "#D9E2EC",
-    "cabecalho_tabela": "#E8F1FA",
-    "erro": "#DC2626",
+    "fundo": "#F4F7FB",          # azul-acinzentado claro — fundo das janelas e abas
+    "card": "#FFFFFF",            # branco — fundo dos cartões (formulários)
+    "primaria": "#005EB8",        # azul Estácio — botões principais, aba e linha selecionada
+    "primaria_hover": "#004A91",  # azul escuro — botão primário ao passar o mouse
+    "texto": "#1F2937",           # quase preto — texto geral, labels, cabeçalhos
+    "texto_suave": "#6B7280",     # cinza médio — subtítulos e textos secundários
+    "borda": "#D9E2EC",           # cinza-azulado claro — borda dos cards e campos
+    "cabecalho_tabela": "#E8F1FA",# azul muito claro — fundo do cabeçalho das tabelas
+    "erro": "#DC2626",            # vermelho — exibido quando a logo não é encontrada
 }
 
 def configurar_estilo():
@@ -35,12 +42,16 @@ def configurar_estilo():
     Configura o visual do sistema usando ttk.Style.
     """
     style = ttk.Style()
-    style.theme_use("clam")
+    style.theme_use("clam")  # tema base mais neutro do Tkinter, permite personalização de cores
+
+    # --- Abas (TNotebook) ---
+    # Fundo da área que contém as abas; sem borda ao redor
     style.configure(
         "TNotebook",
         background=CORES["fundo"],
         borderwidth=0
     )
+    # Cada aba inativa: fonte negrito, espaçamento interno 18px horizontal / 8px vertical, fundo cinza
     style.configure(
         "TNotebook.Tab",
         font=("Segoe UI", 10, "bold"),
@@ -48,22 +59,32 @@ def configurar_estilo():
         background="#E5E7EB",
         foreground=CORES["texto"]
     )
+    # Aba selecionada: fundo azul Estácio e texto branco
     style.map(
         "TNotebook.Tab",
         background=[("selected", CORES["primaria"])],
         foreground=[("selected", "white")]
     )
+
+    # --- Rótulos de texto (TLabel) ---
+    # Fonte padrão para todos os labels do sistema
     style.configure(
         "TLabel",
         font=("Segoe UI", 10),
         background=CORES["fundo"],
         foreground=CORES["texto"]
     )
+
+    # --- Campos de entrada (TEntry) ---
+    # Fonte e espaçamento interno dos inputs de texto
     style.configure(
         "TEntry",
         font=("Segoe UI", 10),
         padding=5
     )
+
+    # --- Botão primário (Incluir, Alterar, Conectar) ---
+    # Fundo azul Estácio, texto branco, negrito, sem borda
     style.configure(
         "Primary.TButton",
         font=("Segoe UI", 10, "bold"),
@@ -72,10 +93,14 @@ def configurar_estilo():
         foreground="white",
         borderwidth=0
     )
+    # Ao passar o mouse ou clicar: fundo azul mais escuro
     style.map(
         "Primary.TButton",
         background=[("active", CORES["primaria_hover"])]
     )
+
+    # --- Botão secundário (Excluir, Listar, Limpar, Exportar) ---
+    # Fundo cinza claro, texto escuro, sem borda
     style.configure(
         "Secondary.TButton",
         font=("Segoe UI", 10),
@@ -84,10 +109,14 @@ def configurar_estilo():
         foreground=CORES["texto"],
         borderwidth=0
     )
+    # Ao passar o mouse ou clicar: fundo cinza um pouco mais escuro
     style.map(
         "Secondary.TButton",
         background=[("active", "#D1D5DB")]
     )
+
+    # --- Tabela de listagem (Treeview) ---
+    # Fundo branco, altura de linha 30px, sem borda
     style.configure(
         "Treeview",
         background="white",
@@ -97,6 +126,7 @@ def configurar_estilo():
         font=("Segoe UI", 10),
         borderwidth=0
     )
+    # Cabeçalho da tabela (Matrícula, Nome, etc.): fundo azul claro, negrito
     style.configure(
         "Treeview.Heading",
         background=CORES["cabecalho_tabela"],
@@ -104,6 +134,7 @@ def configurar_estilo():
         font=("Segoe UI", 10, "bold"),
         padding=6
     )
+    # Linha selecionada: fundo azul Estácio e texto branco
     style.map(
         "Treeview",
         background=[("selected", CORES["primaria"])],
@@ -113,125 +144,229 @@ def configurar_estilo():
 # ============================================================
 # ETAPA 4 - CONEXÃO COM O BANCO DE DADOS
 # ============================================================
-def conectar_db():
+def conectar_db(config=None):
     """
-    Cria conexão com o banco SQLite.
-    O timeout ajuda a reduzir erro de 'database is locked'.
+    Cria conexão com o banco MySQL.
     """
-    conn = sqlite3.connect(CAMINHO_BANCO, timeout=10)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return mysql.connector.connect(**(config or MYSQL_CONFIG))
 
 # ============================================================
 # ETAPA 5 - CRIAÇÃO DAS TABELAS
 # ============================================================
-def init_db():
+def init_db(config=None):
     """
     Cria as tabelas do sistema.
     """
-    with conectar_db() as conn:
+    config_banco = (config or MYSQL_CONFIG).copy()
+    config_servidor = config_banco.copy()
+    nome_banco = config_servidor.pop("database")
+    if not nome_banco.replace("_", "").isalnum():
+        raise ValueError("O nome do banco MySQL deve conter apenas letras, números e _.")
+    with mysql.connector.connect(**config_servidor) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"CREATE DATABASE IF NOT EXISTS `{nome_banco}` "
+            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+        )
+
+    with conectar_db(config_banco) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ALUNO (
-                MATRICULA INTEGER PRIMARY KEY,
-                NOME TEXT NOT NULL,
-                DT_NASCIMENTO TEXT NOT NULL
-            )
+                MATRICULA BIGINT PRIMARY KEY,
+                NOME VARCHAR(255) NOT NULL,
+                DT_NASCIMENTO VARCHAR(20) NOT NULL
+            ) ENGINE=InnoDB
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS DISCIPLINA (
-                ID TEXT PRIMARY KEY,
-                NOME TEXT NOT NULL,
-                TURNO TEXT,
-                SALA TEXT,
-                PROFESSOR TEXT
-            )
+                ID VARCHAR(50) PRIMARY KEY,
+                NOME VARCHAR(255) NOT NULL,
+                TURNO VARCHAR(50),
+                SALA VARCHAR(50),
+                PROFESSOR VARCHAR(255)
+            ) ENGINE=InnoDB
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS NOTA (
-                ID INTEGER PRIMARY KEY AUTOINCREMENT,
-                VALOR REAL NOT NULL,
-                MATRICULA INTEGER NOT NULL,
-                DISCIPLINA_ID TEXT NOT NULL,
+                ID INTEGER PRIMARY KEY AUTO_INCREMENT,
+                VALOR DECIMAL(4, 2) NOT NULL,
+                MATRICULA BIGINT NOT NULL,
+                DISCIPLINA_ID VARCHAR(50) NOT NULL,
                 FOREIGN KEY (MATRICULA) REFERENCES ALUNO(MATRICULA),
                 FOREIGN KEY (DISCIPLINA_ID) REFERENCES DISCIPLINA(ID)
-            )
+            ) ENGINE=InnoDB
         """)
+        cursor.execute("""
+            SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'ALUNO' AND COLUMN_NAME = 'MATRICULA'
+        """)
+        row = cursor.fetchone()
+        col_type = str(row[0]) if row else "BIGINT"  # type: ignore[index]
+        if col_type.upper() != 'BIGINT':
+            cursor.execute("""
+                SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'NOTA'
+                AND COLUMN_NAME = 'MATRICULA' AND REFERENCED_TABLE_NAME = 'ALUNO'
+                LIMIT 1
+            """)
+            fk = cursor.fetchone()
+            if fk:
+                fk_name = str(fk[0])  # type: ignore[index]
+                cursor.execute(f"ALTER TABLE NOTA DROP FOREIGN KEY `{fk_name}`")
+            cursor.execute("ALTER TABLE ALUNO MODIFY COLUMN MATRICULA BIGINT NOT NULL")
+            cursor.execute("ALTER TABLE NOTA MODIFY COLUMN MATRICULA BIGINT NOT NULL")
+            cursor.execute("ALTER TABLE NOTA ADD FOREIGN KEY (MATRICULA) REFERENCES ALUNO(MATRICULA)")
         conn.commit()
-        migrar_banco_antigo(conn)
-
-
-def coluna_tem_tipo(conn, tabela, coluna, tipo_esperado):
-    """
-    Verifica se uma coluna existe com o tipo esperado.
-    """
-    cursor = conn.cursor()
-    cursor.execute(f"PRAGMA table_info({tabela})")
-    for info_coluna in cursor.fetchall():
-        nome_coluna = info_coluna[1]
-        tipo_coluna = (info_coluna[2] or "").upper()
-        if nome_coluna == coluna:
-            return tipo_coluna == tipo_esperado.upper()
-    return False
-
-
-def migrar_banco_antigo(conn):
-    """
-    Corrige bancos criados em versões antigas, onde DISCIPLINA.ID era INTEGER.
-    """
-    disciplina_id_texto = coluna_tem_tipo(conn, "DISCIPLINA", "ID", "TEXT")
-    nota_disciplina_texto = coluna_tem_tipo(conn, "NOTA", "DISCIPLINA_ID", "TEXT")
-
-    if disciplina_id_texto and nota_disciplina_texto:
-        return
-
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = OFF")
-
-    cursor.execute("ALTER TABLE NOTA RENAME TO NOTA_ANTIGA")
-    cursor.execute("ALTER TABLE DISCIPLINA RENAME TO DISCIPLINA_ANTIGA")
-
-    cursor.execute("""
-        CREATE TABLE DISCIPLINA (
-            ID TEXT PRIMARY KEY,
-            NOME TEXT NOT NULL,
-            TURNO TEXT,
-            SALA TEXT,
-            PROFESSOR TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE NOTA (
-            ID INTEGER PRIMARY KEY AUTOINCREMENT,
-            VALOR REAL NOT NULL,
-            MATRICULA INTEGER NOT NULL,
-            DISCIPLINA_ID TEXT NOT NULL,
-            FOREIGN KEY (MATRICULA) REFERENCES ALUNO(MATRICULA),
-            FOREIGN KEY (DISCIPLINA_ID) REFERENCES DISCIPLINA(ID)
-        )
-    """)
-
-    cursor.execute("""
-        INSERT INTO DISCIPLINA (ID, NOME, TURNO, SALA, PROFESSOR)
-        SELECT CAST(ID AS TEXT), NOME, TURNO, SALA, PROFESSOR
-        FROM DISCIPLINA_ANTIGA
-    """)
-    cursor.execute("""
-        INSERT INTO NOTA (ID, VALOR, MATRICULA, DISCIPLINA_ID)
-        SELECT ID, VALOR, MATRICULA, CAST(DISCIPLINA_ID AS TEXT)
-        FROM NOTA_ANTIGA
-        WHERE VALOR IS NOT NULL
-          AND MATRICULA IS NOT NULL
-          AND DISCIPLINA_ID IS NOT NULL
-    """)
-
-    cursor.execute("DROP TABLE NOTA_ANTIGA")
-    cursor.execute("DROP TABLE DISCIPLINA_ANTIGA")
-    cursor.execute("PRAGMA foreign_keys = ON")
-    conn.commit()
 
 # ============================================================
-# ETAPA 6 - CONVERSÃO DA NOTA
+# ETAPA 6 - TELA DE CONEXÃO COM O MYSQL
+# ============================================================
+class TelaConexaoMySQL:
+    def __init__(self, parent):
+        self.conectado = False
+        self.janela = tk.Toplevel(parent)
+        self.janela.title("Conexao com o MySQL")
+        self.janela.geometry("470x430")
+        self.janela.configure(bg=CORES["fundo"])
+        self.janela.resizable(False, False)
+        self.janela.protocol("WM_DELETE_WINDOW", self.cancelar)
+        self.janela.update_idletasks()
+        self.janela.grab_set()
+        self.janela.lift()
+        self.janela.focus_force()
+        self.janela.attributes("-topmost", True)
+
+        card = tk.Frame(
+            self.janela,
+            bg=CORES["card"],
+            padx=28,
+            pady=24,
+            highlightbackground=CORES["borda"],
+            highlightthickness=1
+        )
+        card.pack(fill="both", expand=True, padx=22, pady=22)
+
+        tk.Label(
+            card,
+            text="Conectar ao MySQL",
+            font=("Segoe UI", 18, "bold"),
+            bg=CORES["card"],
+            fg=CORES["texto"]
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        tk.Label(
+            card,
+            text="Informe os dados para acessar ou criar o banco do sistema.",
+            font=("Segoe UI", 9),
+            bg=CORES["card"],
+            fg=CORES["texto_suave"]
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(3, 14))
+
+        self.entradas = {}
+        campos = [
+            ("host", "Servidor:", MYSQL_CONFIG["host"]),
+            ("port", "Porta:", str(MYSQL_CONFIG["port"])),
+            ("user", "Usuario:", MYSQL_CONFIG["user"]),
+            ("password", "Senha:", MYSQL_CONFIG["password"]),
+            ("database", "Banco:", MYSQL_CONFIG["database"]),
+        ]
+        for linha, (chave, texto, valor) in enumerate(campos, start=2):
+            tk.Label(
+                card,
+                text=texto,
+                font=("Segoe UI", 10, "bold"),
+                bg=CORES["card"],
+                fg=CORES["texto"]
+            ).grid(row=linha, column=0, sticky="e", padx=(0, 8), pady=6)
+            entrada = ttk.Entry(card, width=32)
+            entrada.insert(0, valor)
+            entrada.grid(row=linha, column=1, sticky="w", pady=6)
+            self.entradas[chave] = entrada
+
+        self.entradas["password"].config(show="*")
+        self.mostrar_senha = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            card,
+            text="Mostrar senha",
+            variable=self.mostrar_senha,
+            command=self.alternar_senha,
+            bg=CORES["card"],
+            fg=CORES["texto"],
+            activebackground=CORES["card"]
+        ).grid(row=7, column=1, sticky="w")
+
+        botoes = tk.Frame(card, bg=CORES["card"])
+        botoes.grid(row=8, column=0, columnspan=2, pady=(18, 0))
+        ttk.Button(
+            botoes,
+            text="Conectar",
+            command=self.conectar,
+            style="Primary.TButton"
+        ).pack(side="left", padx=5)
+        ttk.Button(
+            botoes,
+            text="Cancelar",
+            command=self.cancelar,
+            style="Secondary.TButton"
+        ).pack(side="left", padx=5)
+
+        self.janela.bind("<Return>", lambda event: self.conectar())
+        self.janela.bind("<Escape>", lambda event: self.cancelar())
+        self.entradas["password"].focus_set()
+
+    def alternar_senha(self):
+        self.entradas["password"].config(show="" if self.mostrar_senha.get() else "*")
+
+    def conectar(self):
+        try:
+            config = {
+                "host": self.entradas["host"].get().strip(),
+                "port": int(self.entradas["port"].get().strip()),
+                "user": self.entradas["user"].get().strip(),
+                "password": self.entradas["password"].get(),
+                "database": self.entradas["database"].get().strip(),
+            }
+            if not config["host"] or not config["user"] or not config["database"]:
+                raise ValueError("Preencha servidor, usuario e banco.")
+            init_db(config)
+            MYSQL_CONFIG.update(config)
+            self.conectado = True
+            self.janela.destroy()
+        except ValueError as e:
+            messagebox.showerror("Dados invalidos", str(e), parent=self.janela)
+        except mysql.connector.Error as e:
+            if e.errno == 1045:
+                mensagem = (
+                    "Acesso negado pelo MySQL.\n\n"
+                    "Confira o usuario e informe a senha configurada no MySQL. "
+                    "A senha do usuario root geralmente nao e vazia."
+                )
+            elif e.errno == 2003:
+                mensagem = (
+                    "Nao foi possivel conectar ao servidor MySQL.\n\n"
+                    "Verifique se o MySQL esta rodando e se o servidor e a porta estao corretos."
+                )
+            else:
+                mensagem = f"Erro MySQL ({e.errno}):\n\n{e}"
+            messagebox.showerror(
+                "Falha na conexao com o MySQL",
+                mensagem,
+                parent=self.janela
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Erro inesperado",
+                f"Ocorreu um erro ao tentar conectar:\n\n{type(e).__name__}: {e}",
+                parent=self.janela
+            )
+
+    def cancelar(self):
+        self.janela.destroy()
+
+
+# ============================================================
+# ETAPA 7 - CONVERSÃO DA NOTA
 # ============================================================
 def converter_nota(valor):
     """
@@ -483,14 +618,14 @@ class SistemaEstacio:
             with conectar_db() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT INTO ALUNO (MATRICULA, NOME, DT_NASCIMENTO) VALUES (?, ?, ?)",
+                    "INSERT INTO ALUNO (MATRICULA, NOME, DT_NASCIMENTO) VALUES (%s, %s, %s)",
                     (int(matricula), nome, nascimento)
                 )
                 conn.commit()
             self.limpar_aluno()
             self.list_alunos()
             messagebox.showinfo("Sucesso", "Aluno incluído com sucesso!")
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             messagebox.showerror("Erro", "Já existe um aluno com essa matrícula.")
         except ValueError:
             messagebox.showerror("Erro", "A matrícula deve ser um número inteiro.")
@@ -525,8 +660,8 @@ class SistemaEstacio:
                 cursor.execute(
                     """
                     UPDATE ALUNO
-                    SET NOME=?, DT_NASCIMENTO=?
-                    WHERE MATRICULA=?
+                    SET NOME=%s, DT_NASCIMENTO=%s
+                    WHERE MATRICULA=%s
                     """,
                     (nome, nascimento, int(matricula))
                 )
@@ -557,7 +692,7 @@ class SistemaEstacio:
             with conectar_db() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM ALUNO WHERE MATRICULA=?",
+                    "DELETE FROM ALUNO WHERE MATRICULA=%s",
                     (int(matricula),)
                 )
                 conn.commit()
@@ -570,7 +705,7 @@ class SistemaEstacio:
             self.list_alunos()
         except ValueError:
             messagebox.showerror("Erro", "A matrícula deve ser um número inteiro.")
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             messagebox.showerror(
                 "Erro",
                 "Não foi possível excluir. Este aluno pode estar vinculado a uma nota."
@@ -677,12 +812,12 @@ class SistemaEstacio:
                     """
                     INSERT INTO DISCIPLINA
                     (ID, NOME, TURNO, SALA, PROFESSOR)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(ID) DO UPDATE SET
-                        NOME=excluded.NOME,
-                        TURNO=excluded.TURNO,
-                        SALA=excluded.SALA,
-                        PROFESSOR=excluded.PROFESSOR
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        NOME=VALUES(NOME),
+                        TURNO=VALUES(TURNO),
+                        SALA=VALUES(SALA),
+                        PROFESSOR=VALUES(PROFESSOR)
                     """,
                     (id_disciplina, nome, turno, sala, professor)
                 )
@@ -694,7 +829,7 @@ class SistemaEstacio:
                 messagebox.showinfo("Sucesso", "Disciplina já existia e foi atualizada na lista.")
             else:
                 messagebox.showinfo("Sucesso", "Disciplina incluída e exibida na lista.")
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             self.list_disciplinas(id_para_selecionar=id_disciplina)
             disciplina_existente = self.buscar_disciplina_por_id(id_disciplina)
             if disciplina_existente:
@@ -738,7 +873,7 @@ class SistemaEstacio:
                 """
                 SELECT ID, NOME, TURNO, SALA, PROFESSOR
                 FROM DISCIPLINA
-                WHERE ID=?
+                WHERE ID=%s
                 """,
                 (id_disciplina,)
             )
@@ -758,8 +893,8 @@ class SistemaEstacio:
                 cursor.execute(
                     """
                     UPDATE DISCIPLINA
-                    SET NOME=?, TURNO=?, SALA=?, PROFESSOR=?
-                    WHERE ID=?
+                    SET NOME=%s, TURNO=%s, SALA=%s, PROFESSOR=%s
+                    WHERE ID=%s
                     """,
                     (nome, turno, sala, professor, id_disciplina)
                 )
@@ -788,7 +923,7 @@ class SistemaEstacio:
             with conectar_db() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM DISCIPLINA WHERE ID=?",
+                    "DELETE FROM DISCIPLINA WHERE ID=%s",
                     (id_disciplina,)
                 )
                 conn.commit()
@@ -799,7 +934,7 @@ class SistemaEstacio:
                 messagebox.showinfo("Sucesso", "Disciplina excluída com sucesso!")
             self.limpar_disciplina()
             self.list_disciplinas()
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             messagebox.showerror(
                 "Erro",
                 "Não foi possível excluir. Esta disciplina pode estar vinculada a uma nota."
@@ -900,7 +1035,7 @@ class SistemaEstacio:
                     """
                     INSERT INTO NOTA
                     (VALOR, MATRICULA, DISCIPLINA_ID)
-                    VALUES (?, ?, ?)
+                    VALUES (%s, %s, %s)
                     """,
                     (converter_nota(valor), int(matricula), disciplina_id)
                 )
@@ -910,7 +1045,7 @@ class SistemaEstacio:
             messagebox.showinfo("Sucesso", "Nota incluída com sucesso!")
         except ValueError as e:
             messagebox.showerror("Erro", str(e))
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             messagebox.showerror(
                 "Erro",
                 "Verifique se a matrícula do aluno e o ID da disciplina existem."
@@ -947,8 +1082,8 @@ class SistemaEstacio:
                 cursor.execute(
                     """
                     UPDATE NOTA
-                    SET VALOR=?, MATRICULA=?, DISCIPLINA_ID=?
-                    WHERE ID=?
+                    SET VALOR=%s, MATRICULA=%s, DISCIPLINA_ID=%s
+                    WHERE ID=%s
                     """,
                     (converter_nota(valor), int(matricula), disciplina_id, int(id_nota))
                 )
@@ -962,7 +1097,7 @@ class SistemaEstacio:
             self.list_notas()
         except ValueError as e:
             messagebox.showerror("Erro", str(e))
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             messagebox.showerror(
                 "Erro",
                 "Verifique se a matrícula do aluno e o ID da disciplina existem."
@@ -984,7 +1119,7 @@ class SistemaEstacio:
             with conectar_db() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM NOTA WHERE ID=?",
+                    "DELETE FROM NOTA WHERE ID=%s",
                     (int(id_nota),)
                 )
                 conn.commit()
@@ -1021,13 +1156,14 @@ class SistemaEstacio:
 # ETAPA 14 - EXECUÇÃO DO PROGRAMA
 # ============================================================
 if __name__ == "__main__":
-    # Cria ou verifica o banco de dados.
-    init_db()
-    # Cria a janela principal.
     root = tk.Tk()
-    # Aplica o estilo visual moderno.
+    root.withdraw()
     configurar_estilo()
-    # Inicia o sistema.
-    app = SistemaEstacio(root)
-    # Mantém a janela aberta.
-    root.mainloop()
+    tela_conexao = TelaConexaoMySQL(root)
+    root.wait_window(tela_conexao.janela)
+    if tela_conexao.conectado:
+        root.deiconify()
+        app = SistemaEstacio(root)
+        root.mainloop()
+    else:
+        root.destroy()
